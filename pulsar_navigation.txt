@@ -1,0 +1,135 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from scipy.optimize import least_squares
+
+# Константы
+c = 299792.458  # скорость света, км/с
+AU = 149.6e6    # 1 астрономическая единица, км
+
+# Данные пульсаров (координаты в км)
+pulsars = [
+    {"name": "PSR B1937+21", "position": np.array([-2.68e16, 1.06e17, 2.84e15])},
+    {"name": "PSR J0437-4715", "position": np.array([0.37e16, -0.15e16, -0.09e16])},
+    {"name": "PSR B1821-24", "position": np.array([-1.39e16, -1.27e17, -4.10e15])}
+]
+
+# Генерация траектории с гарантированными колебаниями
+def generate_trajectory(days=200, points=100):
+    t = np.linspace(0, days, points)
+    
+    # Основное движение от Земли (1.0 AU) к Марсу (1.5 AU)
+    x = AU * (1 + 0.5 * t/days)  
+    
+    # Явные колебания 
+    y = AU * 0.3 * np.sin(2*np.pi*t/days)  # +30% от расстояния
+    z = AU * 0.2 * np.cos(2*np.pi*t/days)  # +20% по вертикали
+    
+    return np.column_stack([x, y, z])
+
+# Алгоритм определения положения с проверками
+def solve_position(toa_observed):
+    def residuals(r):
+        errors = []
+        for i, psr in enumerate(pulsars):
+            dist = np.linalg.norm(r - psr["position"])
+            t_pred = dist / c
+            errors.append(toa_observed[i] - t_pred)
+        return np.array(errors)
+    
+    # Начальное приближение 
+    result = least_squares(residuals, x0=[1.2*AU, 0, 0])
+    
+    # Проверка на ошибки оптимизации
+    if not result.success:
+        print("Ошибка оптимизации:", result.message)
+    return result.x
+
+# Генерация траектории
+trajectory = generate_trajectory()
+
+# Проверка данных траектории
+print("Проверка траектории (первые 5 точек):")
+print(trajectory[:5]/AU)
+
+# Расчет идеальных TOA
+toa = np.array([[np.linalg.norm(pos - psr["position"])/c for psr in pulsars] 
+              for pos in trajectory])
+
+# Добавление шумов (100 нс)
+np.random.seed(42)
+toa_noisy = toa + np.random.normal(0, 100e-9, toa.shape)
+
+# Навигационный расчет
+print("\nВыполняем навигационные расчеты...")
+estimated_positions = np.array([solve_position(toa_day) for toa_day in toa_noisy])
+
+# Проверка результатов
+print("\nПроверка навигации (первые 5 точек):")
+print(estimated_positions[:5]/AU)
+
+# Ошибки навигации
+errors = np.linalg.norm(trajectory - estimated_positions, axis=1)
+
+
+# 1. Настройка стиля
+plt.style.use('seaborn-v0_8')
+
+# 2. 2D графика (XY) с принудительным масштабированием
+plt.figure(figsize=(14, 7))
+plt.plot(trajectory[:,0]/AU, trajectory[:,1]/AU, 
+         label='Реальная траектория', linewidth=3, color='blue')
+plt.plot(estimated_positions[:,0]/AU, estimated_positions[:,1]/AU, 
+         'r--', label='Навигационное решение', linewidth=2)
+
+# Жестко фиксируем масштаб
+plt.ylim(-0.5, 0.5)  
+plt.xlabel('X (а.е.)', fontsize=14)
+plt.ylabel('Y (а.е.)', fontsize=14)
+plt.title('Траектория Земля-Марс: проекция XY\n(принудительный масштаб по Y)', fontsize=16)
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.legend(fontsize=12)
+plt.savefig('mars_navigation_2d_forced.png', dpi=300, bbox_inches='tight')
+
+
+fig = plt.figure(figsize=(16, 10))
+ax = fig.add_subplot(111, projection='3d')
+
+
+scale = 1.5  # Коэффициент увеличения
+ax.plot(trajectory[:,0]/AU, scale*trajectory[:,1]/AU, scale*trajectory[:,2]/AU,
+        label='Реальная траектория', linewidth=3)
+ax.plot(estimated_positions[:,0]/AU, scale*estimated_positions[:,1]/AU, 
+        scale*estimated_positions[:,2]/AU, 'r--', label='Навигационное решение', linewidth=2)
+
+# Настройки осей
+ax.set_xlabel('X (а.е.)', fontsize=12, labelpad=15)
+ax.set_ylabel('Y (а.е.)', fontsize=12, labelpad=15)
+ax.set_zlabel('Z (а.е.)', fontsize=12, labelpad=15)
+ax.set_title('3D траектория с увеличенной амплитудой колебаний', fontsize=16, pad=20)
+
+
+ax.set_xlim(0.9, 1.6)
+ax.set_ylim(-0.8, 0.8)
+ax.set_zlim(-0.8, 0.8)
+
+ax.legend(fontsize=12)
+ax.grid(True)
+plt.savefig('mars_navigation_3d_forced.png', dpi=300, bbox_inches='tight')
+
+# 4. Вывод статистики
+print("\nРезультаты:")
+print(f"Средняя ошибка: {np.mean(errors)/1000:.1f} тыс. км")
+print(f"Максимальная ошибка: {np.max(errors)/1000:.1f} тыс. км")
+print(f"Точность: {np.mean(errors)/AU*100:.2f}% от расстояния")
+
+# 5. Дополнительная проверка данных
+plt.figure(figsize=(12, 6))
+plt.plot(errors/AU)
+plt.title('График ошибок навигации', fontsize=14)
+plt.xlabel('Номер точки')
+plt.ylabel('Ошибка (в долях AU)')
+plt.grid(True)
+plt.savefig('navigation_errors.png', dpi=250)
+
+plt.show()
